@@ -361,10 +361,22 @@ app.post('/api/register', async (req, res) => {
         const passwordHash = await bcrypt.hash(password, 10);
         const user = new User({ firstName, lastName, email, passwordHash });
         await user.save();
-        req.session.email = user.email; // Set session for new user!
-        res.status(201).json({ message: 'Registration successful.' });
+        
+        console.log(`\n✅ REGISTRATION: New user created - ${email}`);
+        req.session.email = user.email;
+        req.session.userId = user._id.toString();
+        
+        // Save session explicitly, just like login
+        req.session.save((err) => {
+            if (err) {
+                console.error(`❌ Session save failed during registration:`, err.message);
+                return res.status(500).json({ message: 'Session error.' });
+            }
+            console.log(`✅ Session persisted for new user. SessionID: ${req.sessionID}`);
+            res.status(201).json({ message: 'Registration successful.', sessionId: req.sessionID });
+        });
     } catch (err) {
-        console.error('Registration error:', err);
+        console.error('❌ Registration error:', err.message);
         res.status(500).json({ message: 'Server error.' });
     }
 });
