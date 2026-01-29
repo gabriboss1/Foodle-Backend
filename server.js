@@ -73,13 +73,14 @@ if (!process.env.SESSION_SECRET) {
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: false, // Don't save empty sessions
+    saveUninitialized: true, // CRITICAL: Save empty sessions so cookies are set on first request
     rolling: true, // Reset expiration on each request
     cookie: {
         secure: process.env.NODE_ENV === 'production', // true in production (HTTPS), false in development
         httpOnly: true, // Prevent XSS attacks
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        sameSite: 'lax' // Allow cross-site requests but maintain security
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for production cross-origin, 'lax' for development
+        domain: process.env.NODE_ENV === 'production' ? undefined : 'localhost' // Don't restrict domain in production
     },
     name: 'foodle.session' // Custom session name
 }));
