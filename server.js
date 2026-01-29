@@ -123,15 +123,21 @@ app.use(cors({
         }
 
         // Allow all Vercel preview and production deployments
-        // Matches: *.vercel.app domains (covers preview and production)
         const allowVercelPattern = /^https:\/\/.*\.vercel\.app$/;
 
         // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
+        if (!origin) {
+            console.log(`✅ Request with no origin - allowing`);
+            return callback(null, true);
+        }
 
         // Check if origin matches allowed list or Vercel pattern
         if (allowedOrigins.includes(origin) || allowVercelPattern.test(origin)) {
-            callback(null, true); // Allow for development - restrict in production
+            console.log(`✅ CORS allowed for origin: ${origin}`);
+            callback(null, true);
+        } else {
+            console.log(`❌ CORS blocked for origin: ${origin}`);
+            callback(null, false); // Explicitly block
         }
     },
     credentials: true, // Enable credentials (cookies, authorization headers)
@@ -391,15 +397,17 @@ app.post('/api/login', async (req, res) => {
         req.session.userId = user._id.toString();
         console.log(`✅ Session email set: ${req.session.email}`);
         
-        // Save session explicitly
+        // Save session explicitly and ensure Set-Cookie header is sent
         req.session.save((err) => {
             if (err) {
                 console.error(`❌ Session save failed:`, err.message);
                 return res.status(500).json({ message: 'Session error.' });
             }
             console.log(`✅ Session persisted. SessionID: ${req.sessionID}`);
+            // Ensure Set-Cookie is being sent - log response headers
+            console.log(`✅ Response headers about to be sent:`, res.getHeaders());
             console.log(`✅ LOGIN SUCCESSFUL for ${email}\n`);
-            res.status(200).json({ message: 'Login successful.' });
+            res.status(200).json({ message: 'Login successful.', sessionId: req.sessionID });
         });
     } catch (err) {
         console.error(`❌ Login error:`, err.message);
@@ -1409,6 +1417,10 @@ app.post('/api/nearby-restaurants', async (req, res) => {
 // Get user profile
 app.get('/api/user/profile', async (req, res) => {
     console.log(`\n👤 PROFILE REQUEST`);
+    console.log(`   Session ID: ${req.sessionID}`);
+    console.log(`   Session email: ${req.session?.email}`);
+    console.log(`   Cookie header received: ${req.get('Cookie') ? 'YES' : 'NO'}`);
+    
     try {
         // Check authentication
         if (!req.session?.email) {
