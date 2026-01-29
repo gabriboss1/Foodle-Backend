@@ -21,6 +21,7 @@ const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const { Server } = require('socket.io');
+const { spawn } = require('child_process');
 const { getRestaurantDescription } = require('./restaurant-descriptions');
 
 // Define PORT early so it can be used throughout the file
@@ -3338,23 +3339,42 @@ const startServer = async () => {
             console.log(`📱 Mobile GPS service: /mobile-gps`);
             console.log(`🔌 WebSocket server ready for real-time location updates`);
             
-            // Start ngrok automatically for production
+            // Start ngrok automatically in production
             if (process.env.NODE_ENV === 'production') {
                 try {
-                    const ngrok = require('ngrok');
-                    const ngrokUrl = await ngrok.connect({
-                        proto: 'http',
-                        addr: finalPort,
-                        authtoken: process.env.NGROK_AUTHTOKEN
+                    // Start ngrok CLI process (must be installed globally or in PATH)
+                    const ngrokProcess = spawn('ngrok', ['http', finalPort, '--log', 'stdout'], {
+                        stdio: ['ignore', 'pipe', 'pipe']
                     });
                     
-                    // Store the ngrok URL for use in QR code generation
-                    process.env.DETECTED_NGROK_URL = ngrokUrl;
-                    console.log(`\n🌐 NGROK TUNNEL STARTED`);
-                    console.log(`   Public URL: ${ngrokUrl}`);
-                    console.log(`   This URL will be used for all QR codes`);
+                    let ngrokUrl = null;
+                    
+                    ngrokProcess.stdout.on('data', (data) => {
+                        const output = data.toString();
+                        console.log(`🌐 [ngrok] ${output}`);
+                        
+                        // Extract ngrok URL from output
+                        const urlMatch = output.match(/https:\/\/[a-f0-9\-]+\.ngrok(?:\.com|\.io)/);
+                        if (urlMatch && !ngrokUrl) {
+                            ngrokUrl = urlMatch[0];
+                            process.env.DETECTED_NGROK_URL = ngrokUrl;
+                            console.log(`\n✅ NGROK TUNNEL ACTIVE`);
+                            console.log(`   Public URL: ${ngrokUrl}`);
+                            console.log(`   All QR codes will use this URL\n`);
+                        }
+                    });
+                    
+                    ngrokProcess.stderr.on('data', (data) => {
+                        console.warn(`🌐 [ngrok error] ${data.toString()}`);
+                    });
+                    
+                    ngrokProcess.on('error', (err) => {
+                        console.warn(`⚠️  ngrok process error: ${err.message}`);
+                        console.log(`   Make sure ngrok is installed: npm install -g ngrok`);
+                    });
+                    
                 } catch (err) {
-                    console.warn(`⚠️  Could not start ngrok tunnel: ${err.message}`);
+                    console.warn(`⚠️  Could not start ngrok: ${err.message}`);
                     console.log(`   QR codes will use local IP instead`);
                 }
             } else {
