@@ -91,18 +91,27 @@ app.use(passport.session());
 // CORS configuration - MUST be after session middleware for proper credential handling
 app.use(cors({
     origin: function(origin, callback) {
-        // Allow all origins for development - adjust for production
-        const allowedOrigins = process.env.FRONTEND_URL ? 
-            process.env.FRONTEND_URL.split(',') : 
-            ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5001'];
-        
+        // Build allowed origins list
+        const allowedOrigins = [
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'http://localhost:5001'
+        ];
+
+        // Add production frontend URLs from env var
+        if (process.env.FRONTEND_URL) {
+            allowedOrigins.push(...process.env.FRONTEND_URL.split(',').map(url => url.trim()));
+        }
+
+        // Allow all Vercel preview and production deployments
+        // Matches: *.vercel.app domains (covers preview and production)
+        const allowVercelPattern = /^https:\/\/.*\.vercel\.app$/;
+
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        
-        if (allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            console.log(`⚠️ CORS blocked request from: ${origin}`);
+
+        // Check if origin matches allowed list or Vercel pattern
+        if (allowedOrigins.includes(origin) || allowVercelPattern.test(origin)) {
             callback(null, true); // Allow for development - restrict in production
         }
     },
@@ -338,6 +347,10 @@ app.post('/api/register', async (req, res) => {
 // Login endpoint
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
+    console.log(`📥 POST /api/login - Email: ${email}`);
+    console.log(`📥 Session before login:`, req.session);
+    console.log(`📥 Cookies received:`, req.headers.cookie);
+    
     if (!email || !password) {
         return res.status(400).json({ message: 'Email and password are required.' });
     }
@@ -351,7 +364,16 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ message: 'Invalid password.' });
         }
         req.session.email = user.email; // Store email in session!
-        res.status(200).json({ message: 'Login successful.' });
+        // Save session explicitly and send response with cookie headers
+        req.session.save((err) => {
+            if (err) {
+                console.error('❌ Session save error:', err);
+                return res.status(500).json({ message: 'Session error.' });
+            }
+            console.log(`✅ Session saved for ${email}:`, req.session);
+            console.log(`✅ Session ID:`, req.sessionID);
+            res.status(200).json({ message: 'Login successful.' });
+        });
     } catch (err) {
         console.error('Login error:', err);
         res.status(500).json({ message: 'Server error.' });
