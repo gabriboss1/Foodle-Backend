@@ -365,16 +365,10 @@ app.post('/api/register', async (req, res) => {
         console.log(`\n✅ REGISTRATION: New user created - ${email}`);
         req.session.email = user.email;
         req.session.userId = user._id.toString();
-        
-        // Save session explicitly, just like login
-        req.session.save((err) => {
-            if (err) {
-                console.error(`❌ Session save failed during registration:`, err.message);
-                return res.status(500).json({ message: 'Session error.' });
-            }
-            console.log(`✅ Session persisted for new user. SessionID: ${req.sessionID}`);
-            res.status(201).json({ message: 'Registration successful.', sessionId: req.sessionID });
-        });
+        console.log(`✅ Session email set for new user: ${req.session.email}`);
+        console.log(`✅ REGISTRATION SUCCESSFUL for ${email}\n`);
+        // Let express-session middleware handle setting the cookie
+        res.status(201).json({ message: 'Registration successful.', sessionId: req.sessionID });
     } catch (err) {
         console.error('❌ Registration error:', err.message);
         res.status(500).json({ message: 'Server error.' });
@@ -408,19 +402,9 @@ app.post('/api/login', async (req, res) => {
         req.session.email = user.email;
         req.session.userId = user._id.toString();
         console.log(`✅ Session email set: ${req.session.email}`);
-        
-        // Save session explicitly and ensure Set-Cookie header is sent
-        req.session.save((err) => {
-            if (err) {
-                console.error(`❌ Session save failed:`, err.message);
-                return res.status(500).json({ message: 'Session error.' });
-            }
-            console.log(`✅ Session persisted. SessionID: ${req.sessionID}`);
-            // Ensure Set-Cookie is being sent - log response headers
-            console.log(`✅ Response headers about to be sent:`, res.getHeaders());
-            console.log(`✅ LOGIN SUCCESSFUL for ${email}\n`);
-            res.status(200).json({ message: 'Login successful.', sessionId: req.sessionID });
-        });
+        console.log(`✅ LOGIN SUCCESSFUL for ${email}\n`);
+        // Let express-session middleware handle setting the cookie
+        res.status(200).json({ message: 'Login successful.', sessionId: req.sessionID });
     } catch (err) {
         console.error(`❌ Login error:`, err.message);
         res.status(500).json({ message: 'Server error.' });
