@@ -10,6 +10,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const path = require('path');
@@ -49,17 +50,18 @@ global.locationSessions = new Map();
 
 // Debug middleware to log all requests and session state
 app.use((req, res, next) => {
-    console.log(`📥 ${req.method} ${req.path} from ${req.ip}`);
-    console.log(`📥 Session state:`, {
-        id: req.session?.id,
-        email: req.session?.email,
-        hasSession: !!req.session
-    });
-    console.log(`📥 Headers:`, {
-        'user-agent': req.get('User-Agent'),
-        'cookie': req.get('Cookie'),
-        'origin': req.get('Origin')
-    });
+    // Skip logging for health checks and static files
+    const userAgent = req.get('User-Agent') || '';
+    if (userAgent.includes('Go-http-client') || req.path === '/' || req.path === '/api/health') {
+        return next();
+    }
+    
+    console.log(`\n📥 ${req.method} ${req.path}`);
+    if (req.session?.email) {
+        console.log(`✅ Authenticated as: ${req.session.email}`);
+    } else if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE') {
+        console.log(`⚠️ Not authenticated`);
+    }
     next();
 });
 
@@ -70,19 +72,36 @@ if (!process.env.SESSION_SECRET) {
     console.error('❌ CRITICAL: SESSION_SECRET environment variable not set!');
     process.exit(1);
 }
+
+// Configure MongoDB session store
+const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017/foodle';
+const mongoStore = new MongoStore({
+    mongoUrl: mongoUrl,
+    touchAfter: 24 * 3600 // Lazy session update (24 hours)
+});
+
+mongoStore.on('error', (err) => {
+    console.error('❌ MongoStore error:', err.message);
+});
+
+mongoStore.on('connected', () => {
+    console.log('✅ MongoDB session store connected');
+});
+
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: true, // CRITICAL: Save empty sessions so cookies are set on first request
-    rolling: true, // Reset expiration on each request
+    saveUninitialized: true,
+    store: mongoStore, // Use MongoDB instead of MemoryStore
+    rolling: true,
     cookie: {
-        secure: process.env.NODE_ENV === 'production', // true in production (HTTPS), false in development
-        httpOnly: true, // Prevent XSS attacks
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for production cross-origin, 'lax' for development
-        domain: process.env.NODE_ENV === 'production' ? undefined : 'localhost' // Don't restrict domain in production
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000,
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        domain: process.env.NODE_ENV === 'production' ? undefined : 'localhost'
     },
-    name: 'foodle.session' // Custom session name
+    name: 'foodle.session'
 }));
 
 app.use(passport.initialize());
@@ -347,35 +366,44 @@ app.post('/api/register', async (req, res) => {
 // Login endpoint
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
-    console.log(`📥 POST /api/login - Email: ${email}`);
-    console.log(`📥 Session before login:`, req.session);
-    console.log(`📥 Cookies received:`, req.headers.cookie);
-    
+    console.log(`\n🔐 LOGIN ATTEMPT: ${email}`);
+
     if (!email || !password) {
+        console.log(`❌ Missing credentials`);
         return res.status(400).json({ message: 'Email and password are required.' });
     }
     try {
         const user = await User.findOne({ email });
         if (!user) {
+            console.log(`❌ User not found: ${email}`);
             return res.status(400).json({ message: 'Email not found. Would you like to create an account?' });
         }
+        console.log(`✅ User found: ${email}`);
+        
         const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) {
+            console.log(`❌ Invalid password for ${email}`);
             return res.status(400).json({ message: 'Invalid password.' });
         }
-        req.session.email = user.email; // Store email in session!
-        // Save session explicitly and send response with cookie headers
+        console.log(`✅ Password correct for ${email}`);
+        
+        req.session.email = user.email;
+        req.session.userId = user._id.toString();
+        console.log(`✅ Session email set: ${req.session.email}`);
+        
+        // Save session explicitly
         req.session.save((err) => {
             if (err) {
-                console.error('❌ Session save error:', err);
+                console.error(`❌ Session save failed:`, err.message);
                 return res.status(500).json({ message: 'Session error.' });
             }
-            console.log(`✅ Session saved for ${email}:`, req.session);
-            console.log(`✅ Session ID:`, req.sessionID);
+            console.log(`✅ Session persisted. SessionID: ${req.sessionID}`);
+            console.log(`✅ LOGIN SUCCESSFUL for ${email}\n`);
             res.status(200).json({ message: 'Login successful.' });
         });
     } catch (err) {
-        console.error('Login error:', err);
+        console.error(`❌ Login error:`, err.message);
+        res.status(500).json({ message: 'Server error.' });
         res.status(500).json({ message: 'Server error.' });
     }
 });
@@ -1380,19 +1408,26 @@ app.post('/api/nearby-restaurants', async (req, res) => {
 
 // Get user profile
 app.get('/api/user/profile', async (req, res) => {
+    console.log(`\n👤 PROFILE REQUEST`);
     try {
         // Check authentication
-        if (!req.session || !req.session.email) {
+        if (!req.session?.email) {
+            console.log(`❌ Not authenticated - no session email`);
             return res.status(401).json({ message: 'Not authenticated.' });
         }
+        console.log(`✅ Authenticated as: ${req.session.email}`);
+        
         // Find user by session email
         const user = await User.findOne({ email: req.session.email });
         if (!user) {
+            console.log(`❌ User not found in DB for: ${req.session.email}`);
             return res.status(404).json({ message: 'User not found.' });
         }
+        console.log(`✅ User profile loaded for ${user.email}`);
+        
         // Respond with user profile data
         res.json({
-            _id: user._id, // Include MongoDB ObjectId for room joining
+            _id: user._id,
             firstName: user.firstName,
             lastName: user.lastName,
             email: user.email,
@@ -1406,11 +1441,11 @@ app.get('/api/user/profile', async (req, res) => {
             },
             lastKnownLocation: user.lastKnownLocation || null,
             previousMeals: user.previousMeals || [],
-            savedRecommendations: user.savedRecommendations || [], // Keep for compatibility
+            savedRecommendations: user.savedRecommendations || [],
             createdAt: user.createdAt
         });
     } catch (err) {
-        console.error('GET /api/user/profile error:', err);
+        console.error(`❌ Profile load error:`, err.message);
         res.status(500).json({ message: 'Server error.' });
     }
 });
