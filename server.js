@@ -36,6 +36,10 @@ if (!JWT_SECRET) {
 const app = express();
 app.use(express.json());
 
+// Trust proxy - CRITICAL for production on Render with HTTPS
+// This ensures secure cookies work properly behind reverse proxies
+app.set('trust proxy', 1);
+
 // Create HTTP server for WebSocket support
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -403,8 +407,24 @@ app.post('/api/login', async (req, res) => {
         req.session.userId = user._id.toString();
         console.log(`✅ Session email set: ${req.session.email}`);
         console.log(`✅ LOGIN SUCCESSFUL for ${email}\n`);
-        // Let express-session middleware handle setting the cookie
-        res.status(200).json({ message: 'Login successful.', sessionId: req.sessionID });
+        
+        // Send response - express-session middleware will add Set-Cookie header
+        res.status(200).json({ 
+            message: 'Login successful.', 
+            sessionId: req.sessionID,
+            debug: {
+                sessionEmail: req.session.email,
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+        // After sending response, log what headers were sent
+        res.on('finish', () => {
+            console.log(`🍪 Set-Cookie header sent: ${res.get('Set-Cookie') ? 'YES' : 'NO'}`);
+            if (res.get('Set-Cookie')) {
+                console.log(`   Value: ${res.get('Set-Cookie').substring(0, 80)}...`);
+            }
+        });
     } catch (err) {
         console.error(`❌ Login error:`, err.message);
         res.status(500).json({ message: 'Server error.' });
@@ -3297,9 +3317,9 @@ const startServer = async () => {
         // Force server to use port 5000 only
         const finalPort = 5000;
         
-        server.listen(finalPort, '0.0.0.0', () => {
+        server.listen(finalPort, '0.0.0.0', async () => {
             const frontendUrls = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['http://localhost:3001'];
-            
+
             // Debug environment variables
             console.log('🔧 Environment Variables Check:');
             console.log('📍 GOOGLE_PLACES_API_KEY:', process.env.GOOGLE_PLACES_API_KEY ? 'Present ✅' : 'Missing ❌');
@@ -3307,17 +3327,39 @@ const startServer = async () => {
             console.log('🔑 GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'Present ✅' : 'Missing ❌');
             console.log('🔐 GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'Present ✅' : 'Missing ❌');
             console.log('');
-            
+
             if (finalPort !== PORT) {
                 console.log(`⚠️  Port ${PORT} was in use, switched to port ${finalPort}`);
             }
-            
+
             console.log(`🚀 Foodle backend server running on port ${finalPort}`);
             console.log(`📊 Health check: http://localhost:${finalPort}/api/health`);
             console.log(`🔗 CORS enabled for: ${frontendUrls.join(', ')}`);
             console.log(`📱 Mobile GPS service: /mobile-gps`);
             console.log(`🔌 WebSocket server ready for real-time location updates`);
-            console.log(`🌐 Ready for ngrok: ngrok http ${finalPort}`);
+            
+            // Start ngrok automatically for production
+            if (process.env.NODE_ENV === 'production') {
+                try {
+                    const ngrok = require('ngrok');
+                    const ngrokUrl = await ngrok.connect({
+                        proto: 'http',
+                        addr: finalPort,
+                        authtoken: process.env.NGROK_AUTHTOKEN
+                    });
+                    
+                    // Store the ngrok URL for use in QR code generation
+                    process.env.DETECTED_NGROK_URL = ngrokUrl;
+                    console.log(`\n🌐 NGROK TUNNEL STARTED`);
+                    console.log(`   Public URL: ${ngrokUrl}`);
+                    console.log(`   This URL will be used for all QR codes`);
+                } catch (err) {
+                    console.warn(`⚠️  Could not start ngrok tunnel: ${err.message}`);
+                    console.log(`   QR codes will use local IP instead`);
+                }
+            } else {
+                console.log(`🌐 Ready for ngrok: ngrok http ${finalPort}`);
+            }
         }).on('error', (error) => {
             console.error('🚨 Failed to start server:', error);
             process.exit(1);
