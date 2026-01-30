@@ -3346,33 +3346,49 @@ const startServer = async () => {
                     const ngrokProcess = spawn('ngrok', ['http', finalPort, '--log', 'stdout'], {
                         stdio: ['ignore', 'pipe', 'pipe']
                     });
-                    
+
                     let ngrokUrl = null;
-                    
+                    let urlFound = false;
+
                     ngrokProcess.stdout.on('data', (data) => {
                         const output = data.toString();
                         console.log(`🌐 [ngrok] ${output}`);
-                        
-                        // Extract ngrok URL from output
-                        const urlMatch = output.match(/https:\/\/[a-f0-9\-]+\.ngrok(?:\.com|\.io)/);
-                        if (urlMatch && !ngrokUrl) {
-                            ngrokUrl = urlMatch[0];
-                            process.env.DETECTED_NGROK_URL = ngrokUrl;
-                            console.log(`\n✅ NGROK TUNNEL ACTIVE`);
-                            console.log(`   Public URL: ${ngrokUrl}`);
-                            console.log(`   All QR codes will use this URL\n`);
+
+                        // Extract ngrok URL - be very aggressive with patterns
+                        if (!urlFound) {
+                            let urlMatch;
+                            
+                            // Try to extract any HTTPS URL containing "ngrok"
+                            urlMatch = output.match(/https:\/\/[^\s>]+/);
+                            
+                            if (urlMatch && urlMatch[0].includes('ngrok')) {
+                                ngrokUrl = urlMatch[0];
+                                // Clean up if URL has extra characters
+                                ngrokUrl = ngrokUrl.replace(/[>'"`;,]/g, '').trim();
+                                
+                                // Only accept if it looks like ngrok URL
+                                if (ngrokUrl.includes('ngrok')) {
+                                    process.env.DETECTED_NGROK_URL = ngrokUrl;
+                                    process.env.NGROK_URL = ngrokUrl;
+                                    urlFound = true;
+                                    
+                                    console.log(`\n✅ NGROK TUNNEL ACTIVE AND CAPTURED`);
+                                    console.log(`   Public URL: ${ngrokUrl}`);
+                                    console.log(`   Environment variables set for QR codes\n`);
+                                }
+                            }
                         }
                     });
-                    
+
                     ngrokProcess.stderr.on('data', (data) => {
-                        console.warn(`🌐 [ngrok error] ${data.toString()}`);
+                        console.warn(`🌐 [ngrok] ${data.toString()}`);
                     });
-                    
+
                     ngrokProcess.on('error', (err) => {
                         console.warn(`⚠️  ngrok process error: ${err.message}`);
                         console.log(`   Make sure ngrok is installed: npm install -g ngrok`);
                     });
-                    
+
                 } catch (err) {
                     console.warn(`⚠️  Could not start ngrok: ${err.message}`);
                     console.log(`   QR codes will use local IP instead`);
