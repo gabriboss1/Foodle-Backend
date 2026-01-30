@@ -3342,8 +3342,13 @@ const startServer = async () => {
             // Start ngrok automatically in production
             if (process.env.NODE_ENV === 'production') {
                 try {
-                    // Start ngrok CLI process (must be installed globally or in PATH)
-                    const ngrokProcess = spawn('ngrok', ['http', finalPort, '--log', 'stdout'], {
+                    // Build ngrok command with authtoken if available
+                    const ngrokArgs = ['http', finalPort, '--log', 'stdout'];
+                    if (process.env.NGROK_AUTHTOKEN) {
+                        ngrokArgs.push('--authtoken', process.env.NGROK_AUTHTOKEN);
+                    }
+                    
+                    const ngrokProcess = spawn('ngrok', ngrokArgs, {
                         stdio: ['ignore', 'pipe', 'pipe']
                     });
 
@@ -3354,39 +3359,40 @@ const startServer = async () => {
                         const output = data.toString();
                         console.log(`🌐 [ngrok] ${output}`);
 
-                        // Extract ngrok URL - be very aggressive with patterns
-                        if (!urlFound) {
-                            let urlMatch;
+                        // Extract ngrok URL - but NOT from error messages
+                        if (!urlFound && !output.includes('ERR_NGROK') && !output.includes('error')) {
+                            let urlMatch = output.match(/https:\/\/([a-zA-Z0-9\-]+\.ngrok\.(?:io|com))/);
                             
-                            // Try to extract any HTTPS URL containing "ngrok"
-                            urlMatch = output.match(/https:\/\/[^\s>]+/);
-                            
-                            if (urlMatch && urlMatch[0].includes('ngrok')) {
+                            if (urlMatch) {
                                 ngrokUrl = urlMatch[0];
-                                // Clean up if URL has extra characters
-                                ngrokUrl = ngrokUrl.replace(/[>'"`;,]/g, '').trim();
+                                process.env.DETECTED_NGROK_URL = ngrokUrl;
+                                process.env.NGROK_URL = ngrokUrl;
+                                urlFound = true;
                                 
-                                // Only accept if it looks like ngrok URL
-                                if (ngrokUrl.includes('ngrok')) {
-                                    process.env.DETECTED_NGROK_URL = ngrokUrl;
-                                    process.env.NGROK_URL = ngrokUrl;
-                                    urlFound = true;
-                                    
-                                    console.log(`\n✅ NGROK TUNNEL ACTIVE AND CAPTURED`);
-                                    console.log(`   Public URL: ${ngrokUrl}`);
-                                    console.log(`   Environment variables set for QR codes\n`);
-                                }
+                                console.log(`\n✅ NGROK TUNNEL ACTIVE AND CAPTURED`);
+                                console.log(`   Public URL: ${ngrokUrl}`);
+                                console.log(`   All QR codes will use this URL\n`);
                             }
                         }
                     });
 
                     ngrokProcess.stderr.on('data', (data) => {
-                        console.warn(`🌐 [ngrok] ${data.toString()}`);
+                        const errorMsg = data.toString();
+                        console.warn(`🌐 [ngrok] ${errorMsg}`);
+                        
+                        // If auth fails, log helpful message
+                        if (errorMsg.includes('authentication failed')) {
+                            console.warn(`\n⚠️  NGROK AUTHENTICATION FAILED`);
+                            console.warn(`   QR codes will use local IP instead`);
+                            console.warn(`   To use ngrok, add NGROK_AUTHTOKEN to Render environment variables:`);
+                            console.warn(`   1. Go to https://dashboard.ngrok.com`);
+                            console.warn(`   2. Copy your authtoken`);
+                            console.warn(`   3. Add to Render: NGROK_AUTHTOKEN=<your_token>\n`);
+                        }
                     });
 
                     ngrokProcess.on('error', (err) => {
                         console.warn(`⚠️  ngrok process error: ${err.message}`);
-                        console.log(`   Make sure ngrok is installed: npm install -g ngrok`);
                     });
 
                 } catch (err) {
