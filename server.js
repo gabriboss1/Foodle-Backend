@@ -396,18 +396,6 @@ const upload = multer({
     }
 });
 
-// Add multer error handling middleware
-app.use((err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-        console.error('❌ Multer error:', err.message);
-        return res.status(400).json({ message: `Upload error: ${err.message}` });
-    } else if (err?.message?.includes('Only image files')) {
-        console.error('❌ File validation error:', err.message);
-        return res.status(400).json({ message: err.message });
-    }
-    next(err);
-});
-
 // Serve uploaded images statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -2907,66 +2895,6 @@ io.on('connection', (socket) => {
         console.log('🔌 Client disconnected:', socket.id);
     });
 });
-
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, 'uploads/'));
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
-const upload = multer({ 
-    storage: storage,
-    limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
-    },
-    fileFilter: function (req, file, cb) {
-        // Check file type
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Only image files are allowed!'), false);
-        }
-    }
-});
-
-// Profile image upload endpoint
-app.post('/api/user/profile-image', upload.single('profileImage'), async (req, res) => {
-    try {
-        if (!req.session || !req.session.email) {
-            return res.status(401).json({ message: 'Authentication required.' });
-        }
-        
-        if (!req.file) {
-            return res.status(400).json({ message: 'No file uploaded.' });
-        }
-        
-        console.log('File uploaded:', req.file.filename, 'for user:', req.session.email);
-        
-        const user = await User.findOne({ email: req.session.email });
-        if (!user) {
-            console.log('Upload failed: User not found');
-            return res.status(404).json({ message: 'User not found.' });
-        }
-        
-        // Save the file path
-        user.profileImageUrl = `/uploads/${req.file.filename}`;
-        await user.save();
-        
-        console.log('Profile image saved successfully:', user.profileImageUrl);
-        res.json({ profileImageUrl: user.profileImageUrl });
-    } catch (err) {
-        console.error('Profile image upload error:', err);
-        res.status(500).json({ message: 'Server error.' });
-    }
-});
-
-// Serve uploaded images statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Logout endpoint
 app.post('/api/logout', (req, res) => {
