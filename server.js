@@ -521,7 +521,7 @@ app.post('/api/user/profile-image', upload.single('profileImage'), async (req, r
 
 // === GOOGLE OAUTH CONFIGURATION ===
 
-// Helper function to get the current server URL
+// Helper function to get the current server URL (for general backend URL)
 const getServerUrl = () => {
     if (process.env.NODE_ENV === 'production') {
         // In production, use the backend URL from environment or the incoming request
@@ -533,10 +533,24 @@ const getServerUrl = () => {
     }
 };
 
+// Helper function to get OAuth callback URL (now goes through frontend proxy)
+const getOAuthCallbackUrl = () => {
+    if (process.env.NODE_ENV === 'production') {
+        // In production, use the frontend domain (proxied through frontend)
+        return process.env.FRONTEND_URL ? 
+            `${process.env.FRONTEND_URL.split(',')[0].trim()}/auth/google/callback` :
+            'https://foodle.dev/auth/google/callback';
+    } else {
+        // In development, use localhost
+        const port = process.env.PORT || 5000;
+        return `http://localhost:${port}/auth/google/callback`;
+    }
+};
+
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: `${getServerUrl()}/auth/google/callback`
+    callbackURL: getOAuthCallbackUrl()
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         console.log('🔍 Google OAuth callback received for:', profile.emails[0].value);
@@ -589,7 +603,7 @@ passport.deserializeUser(async (id, done) => {
 app.get('/auth/google', (req, res, next) => {
     console.log('🔍 Google OAuth initiation requested');
     console.log('🔍 Client ID:', process.env.GOOGLE_CLIENT_ID || 'USING DEFAULT');
-    console.log('🔍 Callback URL:', `${getServerUrl()}/auth/google/callback`);
+    console.log('🔍 Callback URL:', getOAuthCallbackUrl());
     
     // Store the referer in session to remember which frontend port to redirect to
     const referer = req.get('Referer');
