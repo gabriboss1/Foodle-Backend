@@ -533,13 +533,13 @@ const getServerUrl = () => {
     }
 };
 
-// Helper function to get OAuth callback URL (now goes through frontend proxy)
+// Helper function to get OAuth callback URL
 const getOAuthCallbackUrl = () => {
     if (process.env.NODE_ENV === 'production') {
-        // In production, use the frontend domain (proxied through frontend)
-        return process.env.FRONTEND_URL ? 
-            `${process.env.FRONTEND_URL.split(',')[0].trim()}/auth/google/callback` :
-            'https://foodle.dev/auth/google/callback';
+        // In production, use the backend domain
+        return process.env.BACKEND_URL ? 
+            `${process.env.BACKEND_URL}/auth/google/callback` :
+            'https://foodle-2w8y.onrender.com/auth/google/callback';
     } else {
         // In development, use localhost
         const port = process.env.PORT || 5000;
