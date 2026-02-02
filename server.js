@@ -14,6 +14,7 @@ const MongoStore = require('connect-mongo');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const path = require('path');
+const fs = require('fs');
 const axios = require('axios');
 const { OpenAI } = require('openai');
 const multer = require('multer');
@@ -96,15 +97,16 @@ mongoStore.on('connected', () => {
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: true, // Save session even if uninitialized - needed for CORS
     store: mongoStore, // Use MongoDB instead of MemoryStore
     rolling: true,
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000,
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-        domain: process.env.NODE_ENV === 'production' ? undefined : 'localhost'
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for CORS in production
+        domain: process.env.NODE_ENV === 'production' ? undefined : 'localhost',
+        path: '/' // Ensure cookie is sent to all paths
     },
     name: 'foodle.session'
 }));
@@ -350,6 +352,65 @@ function calculateDistanceBetweenCoords(lat1, lon1, lat2, lon2) {
     return R * c; // Distance in meters
 }
 
+// === MULTER CONFIGURATION FOR FILE UPLOADS ===
+const uploadsDir = path.join(__dirname, 'uploads/');
+
+// Create uploads directory if it doesn't exist
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log('📁 Created uploads directory:', uploadsDir);
+}
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        // Ensure directory exists before saving
+        try {
+            if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+                console.log('📁 Created missing uploads directory:', uploadsDir);
+            }
+            cb(null, uploadsDir);
+        } catch (err) {
+            console.error('❌ Error accessing uploads directory:', err);
+            cb(err);
+        }
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const upload = multer({ 
+    storage: storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: function (req, file, cb) {
+        // Check file type
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed!'), false);
+        }
+    }
+});
+
+// Add multer error handling middleware
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        console.error('❌ Multer error:', err.message);
+        return res.status(400).json({ message: `Upload error: ${err.message}` });
+    } else if (err?.message?.includes('Only image files')) {
+        console.error('❌ File validation error:', err.message);
+        return res.status(400).json({ message: err.message });
+    }
+    next(err);
+});
+
+// Serve uploaded images statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // === USER ROUTES ===
 
 // Registration endpoint
@@ -429,6 +490,43 @@ app.post('/api/login', async (req, res) => {
     } catch (err) {
         console.error(`❌ Login error:`, err.message);
         res.status(500).json({ message: 'Server error.' });
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// Profile image upload endpoint
+app.post('/api/user/profile-image', upload.single('profileImage'), async (req, res) => {
+    try {
+        console.log('📥 POST /api/user/profile-image');
+        console.log('   Session:', req.session?.email ? `${req.session.email} ✅` : 'undefined ⚠️');
+        console.log('   File:', req.file?.filename || 'none');
+        
+        if (!req.session || !req.session.email) {
+            console.log('   ❌ Not authenticated');
+            return res.status(401).json({ message: 'Authentication required.' });
+        }
+        
+        if (!req.file) {
+            console.log('   ❌ No file uploaded');
+            return res.status(400).json({ message: 'No file uploaded.' });
+        }
+        
+        console.log('✅ File uploaded:', req.file.filename, 'for user:', req.session.email);
+        
+        const user = await User.findOne({ email: req.session.email });
+        if (!user) {
+            console.log('❌ User not found');
+            return res.status(404).json({ message: 'User not found.' });
+        }
+        
+        // Save the file path
+        user.profileImageUrl = `/uploads/${req.file.filename}`;
+        await user.save();
+        
+        console.log('✅ Profile image saved:', user.profileImageUrl);
+        res.json({ profileImageUrl: user.profileImageUrl });
+    } catch (err) {
+        console.error('❌ Profile image upload error:', err);
         res.status(500).json({ message: 'Server error.' });
     }
 });
