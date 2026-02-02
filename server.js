@@ -2905,6 +2905,13 @@ io.on('connection', (socket) => {
 // Logout endpoint
 app.post('/api/logout', (req, res) => {
     console.log('🚨🚨🚨 LOGOUT ENDPOINT HIT - SESSION CLEARING LOGIC ACTIVE 🚨🚨🚨');
+    
+    // Kill any running ngrok session to avoid multi-session limit issues
+    if (process.env.NODE_ENV === 'production' && ngrokProcess) {
+        console.log('🛑 Killing ngrok on logout to prevent session conflicts');
+        killNgrok();
+    }
+    
     // Clear session-based restaurant memory for this user
     if (req.session?.id && global.sessionRestaurantMemory) {
         console.log(`🔄 Clearing restaurant memory for session: ${req.session.id}`);
@@ -6152,4 +6159,131 @@ app.use('/auth/google', (err, req, res, next) => {
     
     const frontendUrl = getFrontendUrl(req);
     res.redirect(`${frontendUrl}/signin?error=oauth_error&details=${encodeURIComponent(err.message)}`);
+});
+
+// === NGROK STARTUP & MANAGEMENT ===
+
+// Global variable to track ngrok process
+let ngrokProcess = null;
+
+// Function to kill ngrok gracefully
+function killNgrok() {
+    if (ngrokProcess) {
+        console.log('🛑 Stopping ngrok process...');
+        try {
+            ngrokProcess.kill('SIGTERM');
+            ngrokProcess = null;
+        } catch (err) {
+            console.warn('⚠️  Error killing ngrok:', err.message);
+        }
+    }
+}
+
+// Function to start ngrok
+function startNgrok() {
+    if (process.env.NODE_ENV !== 'production') {
+        console.log('ℹ️  Skipping ngrok - development mode');
+        return;
+    }
+    
+    try {
+        // Kill any existing ngrok process first
+        killNgrok();
+        
+        // Build ngrok command with authtoken if available
+        const ngrokArgs = ['http', 5000, '--log', 'stdout'];
+        if (process.env.NGROK_AUTHTOKEN) {
+            ngrokArgs.push('--authtoken', process.env.NGROK_AUTHTOKEN);
+        }
+        
+        console.log('🌐 Starting ngrok...');
+        ngrokProcess = spawn('ngrok', ngrokArgs, {
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        let urlFound = false;
+
+        ngrokProcess.stdout.on('data', (data) => {
+            const output = data.toString();
+            console.log(`🌐 [ngrok] ${output}`);
+
+            // Extract ngrok URL - but NOT from error messages
+            if (!urlFound && !output.includes('ERR_NGROK') && !output.includes('error')) {
+                let urlMatch = output.match(/https:\/\/([a-zA-Z0-9\-]+\.ngrok\.(?:io|com))/);
+                
+                if (urlMatch) {
+                    const ngrokUrl = urlMatch[0];
+                    process.env.DETECTED_NGROK_URL = ngrokUrl;
+                    process.env.NGROK_URL = ngrokUrl;
+                    urlFound = true;
+                    
+                    console.log(`\n✅ NGROK TUNNEL ACTIVE`);
+                    console.log(`   Public URL: ${ngrokUrl}`);
+                    console.log(`   All QR codes will use this URL\n`);
+                }
+            }
+        });
+
+        ngrokProcess.stderr.on('data', (data) => {
+            const errorMsg = data.toString();
+            console.warn(`🌐 [ngrok] ${errorMsg}`);
+            
+            if (errorMsg.includes('authentication failed')) {
+                console.warn(`\n⚠️  NGROK AUTHENTICATION FAILED`);
+                console.warn(`   QR codes will use local IP instead`);
+                console.warn(`   Free ngrok tier limited to 1 session - disconnect other sessions at:`);
+                console.warn(`   https://dashboard.ngrok.com/agents\n`);
+            }
+        });
+
+        ngrokProcess.on('error', (err) => {
+            console.warn(`⚠️  ngrok process error: ${err.message}`);
+        });
+
+        ngrokProcess.on('exit', (code) => {
+            if (code !== 0) {
+                console.warn(`⚠️  ngrok exited with code ${code}`);
+            }
+            ngrokProcess = null;
+        });
+
+    } catch (err) {
+        console.warn(`⚠️  Could not start ngrok: ${err.message}`);
+        console.log(`   QR codes will use local IP instead`);
+    }
+}
+
+// === SERVER STARTUP ===
+
+// Start server
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🚀 Foodle backend server running on port ${PORT}`);
+    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔗 CORS enabled for: https://foodle-frontend.vercel.app`);
+    console.log(`📱 Mobile GPS service: /mobile-gps`);
+    console.log(`🔌 WebSocket server ready for real-time location updates\n`);
+    
+    // Start ngrok after server is listening
+    startNgrok();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('📵 SIGTERM received, shutting down gracefully...');
+    killNgrok();
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('📵 SIGINT received, shutting down gracefully...');
+    killNgrok();
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
 });
